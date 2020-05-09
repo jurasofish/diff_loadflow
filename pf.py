@@ -25,12 +25,12 @@ class ConsistencyError(DiffLFException):
 
 def init_v(net, n, pd2ppc):
     """ Initial voltage vector using generator voltage setpoints or 1j+0pu. """
-    v = np.ones((n, ), dtype=np.complex64)
+    v = [0j + 1 for _ in range(n)]
     for r in net.gen.itertuples():
         v[pd2ppc[r.bus]] = r.vm_pu
     for r in net.ext_grid.itertuples():
         v[pd2ppc[r.bus]] = r.vm_pu * np.exp(1j * r.va_degree * 180 / np.pi)
-    return v
+    return np.array(v, dtype=np.complex64)
 
 
 def scheduled_p_q(net, load_p, n, pd2ppc):
