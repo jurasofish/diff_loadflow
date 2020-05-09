@@ -1,8 +1,15 @@
 import pandapower as pp
 import pandapower.networks as ppnw
-import autograd.numpy as np
-from autograd import jacobian
 import pandas as pd
+
+
+USE_JAX = False
+if USE_JAX:
+    import jax.numpy as np
+    from jax import grad
+else:
+    import autograd.numpy as np
+    from autograd import grad
 
 
 pd.options.display.width = 1200
@@ -81,7 +88,6 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
         if np.allclose(v, old_v, rtol=tol, atol=0):
             break
 
-    v = np.array(v)
     p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
                - psch[slack_bus])
 
@@ -101,7 +107,7 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
 
 
 def main():
-    net = ppnw.case9()
+    net = ppnw.case5()
     net.ext_grid.at[0, 'vm_pu'] = 1.05
     net.gen.at[0, 'vm_pu'] = 0.99
     pp.create_bus(net, 345, index=1000)
@@ -113,10 +119,10 @@ def main():
     def run_lf_wrapper(__load_p):
         return run_lf(__load_p, net)
 
-    load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float64)
+    load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float32)
     p_slack = run_lf_wrapper(load_p)
     print(f'Slack generator power output: {p_slack}')
-    f_grad_p_slack = jacobian(run_lf_wrapper)
+    f_grad_p_slack = grad(run_lf_wrapper)
     grad_p_slack = f_grad_p_slack(load_p)
     print(f'Gradient of slack power with respect to load at each bus: {grad_p_slack}')
 
