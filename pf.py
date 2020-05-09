@@ -3,6 +3,7 @@ import pandapower.networks as ppnw
 import pandas as pd
 import autograd.numpy as np
 from autograd import grad
+import time
 
 
 pd.options.display.width = 1200
@@ -21,6 +22,12 @@ class ConvergenceError(DiffLFException):
 
 class ConsistencyError(DiffLFException):
     pass
+
+
+def fin_diff(f, x, eps=1e-6):
+    # Finite difference approximation of grad of function f. From JAX docs ty.
+    return np.array([(f(x + eps * v) - f(x - eps * v)) / (2 * eps)
+                     for v in np.eye(len(x))])
 
 
 def init_v(net, n, pd2ppc):
@@ -99,8 +106,21 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
     return p_slack
 
 
+def run_lf_pp(load_p, net, algorithm='nr', init='auto'):
+    pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
+    load_idx_to_drop = []  # Drop the added loads at the end.
+    # Remember, we don't want to add the load twice in the case of fused buses.
+    for b in range(len(load_p)):
+        pp_bus = np.where(pd2ppc == b)[0][0]
+        new_idx = pp.create_load(net, pp_bus, load_p[b])
+        load_idx_to_drop.append(new_idx)
+    pp.runpp(net, algorithm=algorithm, init=init)
+    net.load = net.load.drop(load_idx_to_drop)
+    return net.res_ext_grid.iloc[0]['p_mw']
+
+
 def main():
-    net = ppnw.case5()
+    net = ppnw.case14()
     net.ext_grid.at[0, 'vm_pu'] = 1.05
     net.gen.at[0, 'vm_pu'] = 0.99
     pp.create_bus(net, 345, index=1000)
@@ -109,15 +129,41 @@ def main():
     pp.runpp(net)
     print(net)
 
-    def run_lf_wrapper(__load_p):
-        return run_lf(__load_p, net)
-
     load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float32)
-    p_slack = run_lf_wrapper(load_p)
+    p_slack = run_lf(load_p, net)
     print(f'Slack generator power output: {p_slack}')
-    f_grad_p_slack = grad(run_lf_wrapper)
+
+    print(f'\nGradient of slack power with respect to load at each bus:')
+
+    t1 = time.perf_counter()
+    f_grad_p_slack = grad(lambda x: run_lf(x, net))
     grad_p_slack = f_grad_p_slack(load_p)
-    print(f'Gradient of slack power with respect to load at each bus: {grad_p_slack}')
+    print(f'\tUsing this program with autograd:\n{grad_p_slack}')
+    print(f'Took {time.perf_counter() - t1:.2f} Seconds')
+
+    t1 = time.perf_counter()
+    grad_p_slack_fin_diff = fin_diff(lambda x: run_lf(x, net), load_p)
+    print(f'\tUsing this program finite differences:\n{grad_p_slack_fin_diff}')
+    print(f'Took {time.perf_counter() - t1:.2f} Seconds')
+
+    t1 = time.perf_counter()
+    grad_p_slack_fin_diff_pp = fin_diff(lambda x: run_lf_pp(x, net, 'nr'), load_p)
+    print(f'\nCalculated using finite differences and pandapower newton raphson'
+          f':\n{grad_p_slack_fin_diff_pp}')
+    print(f'Took {time.perf_counter() - t1:.2f} Seconds')
+
+    t1 = time.perf_counter()
+    grad_p_slack_fin_diff_pp = fin_diff(lambda x: run_lf_pp(x, net, 'gs'), load_p)
+    print(f'\nCalculated using finite differences and pandapower gauss siedel'
+          f':\n{grad_p_slack_fin_diff_pp}')
+    print(f'Took {time.perf_counter() - t1:.2f} Seconds')
+
+    t1 = time.perf_counter()
+    grad_p_slack_fin_diff_pp_results =\
+        fin_diff(lambda x: run_lf_pp(x, net, 'nr', 'results'), load_p)
+    print(f'\nCalculated using finite differences and pandapower and NR and results init'
+          f':\n{grad_p_slack_fin_diff_pp_results}')
+    print(f'Took {time.perf_counter() - t1:.2f} Seconds')
 
 
 if __name__ == '__main__':
