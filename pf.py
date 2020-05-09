@@ -1,15 +1,8 @@
 import pandapower as pp
 import pandapower.networks as ppnw
 import pandas as pd
-
-
-USE_JAX = False
-if USE_JAX:
-    import jax.numpy as np
-    from jax import grad
-else:
-    import autograd.numpy as np
-    from autograd import grad
+import autograd.numpy as np
+from autograd import grad
 
 
 pd.options.display.width = 1200
