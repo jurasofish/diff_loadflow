@@ -11,6 +11,18 @@ pd.options.display.max_columns = 100
 np.set_printoptions(formatter={'complexfloat': lambda x: "{0:.3f}".format(x)})
 
 
+class DiffLFException(Exception):
+    pass
+
+
+class ConvergenceError(DiffLFException):
+    pass
+
+
+class ConsistencyError(DiffLFException):
+    pass
+
+
 def init_v(net, n):
     """ Initial voltage vector using generator voltage setpoints or 1j+0pu. """
     v = np.ones((n, ), dtype=np.complex64)
@@ -70,8 +82,15 @@ def run_lf(load_p, net, tol=1e-6, max_iter=100):
         if all(np.real(x) < tol and np.imag(x) < tol for x in errs):
             break
 
+    if it >= max_iter:
+        raise ConvergenceError(f'Load flow not converged in {it} iterations.')
 
     v = np.array(v)
+    actual_v = net.res_bus.vm_pu * np.exp(1j * net.res_bus.va_degree * np.pi/180)
+    if not np.allclose(v, actual_v, atol=0, rtol=tol):
+        raise ConsistencyError(f'Voltages not consistent with pandapower\n'
+                               f'pandapower\t\t{actual_v.values}\nthis program\t{v}')
+
     p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
                - psch[slack_bus])
     return p_slack
