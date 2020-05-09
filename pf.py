@@ -54,7 +54,7 @@ def scheduled_p_q(net, load_p, n, pd2ppc):
     return psch, qsch
 
 
-def run_lf(load_p, net, tol=1e-4, max_iter=100):
+def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
 
     ybus = np.array(net._ppc["internal"]["Ybus"].todense())
     pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
@@ -82,27 +82,32 @@ def run_lf(load_p, net, tol=1e-4, max_iter=100):
         if all(np.real(x) < tol and np.imag(x) < tol for x in errs):
             break
 
+    v = np.array(v)
+    p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
+               - psch[slack_bus])
+
     if it >= max_iter:
         raise ConvergenceError(f'Load flow not converged in {it} iterations.')
-
-    v = np.array(v)
-    if not np.allclose(v, net._ppc["internal"]["V"], atol=0, rtol=tol):
+    if not np.allclose(v, net._ppc["internal"]["V"], atol=comparison_tol, rtol=0):
         raise ConsistencyError(f'Voltages not consistent with pandapower\n'
                                f'pandapower\t\t{net._ppc["internal"]["V"]}'
                                f'\nthis program\t{v}')
+    if not np.allclose(p_slack, net.res_ext_grid.iloc[0]['p_mw'],
+                       atol=comparison_tol, rtol=0):
+        raise ConsistencyError(f'Slack bus powers inconsistent\n'
+                               f'pandapower\t\t{net.res_ext_grid.iloc[0]["p_mw"]}'
+                               f'\nthis program\t{p_slack}')
 
-    p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
-               - psch[slack_bus])
     return p_slack
 
 
 def main():
-    net = ppnw.case4gs()
+    net = ppnw.case9()
     net.ext_grid.at[0, 'vm_pu'] = 1.05
     net.gen.at[0, 'vm_pu'] = 0.99
-    pp.create_bus(net, 345, index=10)
-    pp.create_line_from_parameters(net, 10, 0, 1, 10, 100, 0, 1e10)
-    pp.create_load(net, 10, 100)
+    pp.create_bus(net, 345, index=1000)
+    pp.create_line_from_parameters(net, 1000, 0, 1, 10, 100, 0, 1e10)
+    pp.create_load(net, 1000, 100)
     pp.runpp(net)
     print(net)
 
@@ -111,6 +116,7 @@ def main():
 
     load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float64)
     p_slack = run_lf_wrapper(load_p)
+    print(f'Slack generator power output: {p_slack}')
     f_grad_p_slack = jacobian(run_lf_wrapper)
     grad_p_slack = f_grad_p_slack(load_p)
     print(f'Gradient of slack power with respect to load at each bus: {grad_p_slack}')
