@@ -70,7 +70,7 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
     while it < max_iter:
         old_v, v = v, [x for x in v]
         for b in [b for b in range(n) if b != slack_bus]:
-            qsch_b = (-1*np.imag(np.conj(v[b]) * np.sum(ybus[b, :] * v))
+            qsch_b = (-1*np.imag(np.conj(old_v[b]) * np.sum(ybus[b, :] * old_v))
                       if b in gen_buses else qsch[b])
             v[b] = (1/ybus[b, b]) * ((psch[b]-1j*qsch_b)/np.conj(old_v[b])
                                      - np.sum(ybus_hollow[b, :] * old_v))
