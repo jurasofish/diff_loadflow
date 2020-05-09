@@ -86,10 +86,10 @@ def run_lf(load_p, net, tol=1e-6, max_iter=100):
         raise ConvergenceError(f'Load flow not converged in {it} iterations.')
 
     v = np.array(v)
-    actual_v = net.res_bus.vm_pu * np.exp(1j * net.res_bus.va_degree * np.pi/180)
-    if not np.allclose(v, actual_v, atol=0, rtol=tol):
+    if not np.allclose(v, net._ppc["internal"]["V"], atol=0, rtol=tol):
         raise ConsistencyError(f'Voltages not consistent with pandapower\n'
-                               f'pandapower\t\t{actual_v.values}\nthis program\t{v}')
+                               f'pandapower\t\t{net._ppc["internal"]["V"]}'
+                               f'\nthis program\t{v}')
 
     p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
                - psch[slack_bus])
