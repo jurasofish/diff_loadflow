@@ -23,48 +23,48 @@ class ConsistencyError(DiffLFException):
     pass
 
 
-def init_v(net, n):
+def init_v(net, n, pd2ppc):
     """ Initial voltage vector using generator voltage setpoints or 1j+0pu. """
     v = np.ones((n, ), dtype=np.complex64)
     for r in net.gen.itertuples():
-        v[r.bus] = r.vm_pu
+        v[pd2ppc[r.bus]] = r.vm_pu
     for r in net.ext_grid.itertuples():
-        v[r.bus] = r.vm_pu * np.exp(1j * r.va_degree * 180 / np.pi)
+        v[pd2ppc[r.bus]] = r.vm_pu * np.exp(1j * r.va_degree * 180 / np.pi)
     return v
 
 
-def scheduled_p_q(net, load_p, n):
+def scheduled_p_q(net, load_p, n, pd2ppc):
     """ Return known per unit absolute real and reactive power injected at each bus.
     That is, power injected from generators minus power absorbed by loads.
     Neither real nor reactive power injected by the slack gen is not included.
     Reactive power injected by PV gens is not included.
     """
     sb = net.sn_mva
-    psch, qsch = {b: 0 for b in range(n)}, {b: 0 for b in range(n)}
-    for b in range(n):
+    psch = {b: -1 * load_p[b]/sb for b in range(n)}
+    qsch = {b: 0 for b in range(n)}
+    for r in net.gen.itertuples():
+        psch[pd2ppc[r.bus]] += r.p_mw / sb
+    for r in net.sgen.itertuples():
+        psch[pd2ppc[r.bus]] += r.p_mw / sb
+        qsch[pd2ppc[r.bus]] += r.q_mvar / sb
+    for r in net.load.itertuples():
+        psch[pd2ppc[r.bus]] -= r.p_mw / sb
+        qsch[pd2ppc[r.bus]] -= r.q_mvar / sb
 
-        psch[b] -= load_p[b] / sb  # The magic.
-        if b in net.gen['bus'].tolist():
-            psch[b] += net.gen.loc[net.gen.bus == b, 'p_mw'].values.sum() / sb
-        if b in net.sgen['bus'].tolist():
-            psch[b] += net.sgen.loc[net.gen.bus == b, 'p_mw'].values.sum() / sb
-            qsch[b] += net.sgen.loc[net.gen.bus == b, 'q_mvar'].values.sum() / sb
-        if b in net.load['bus'].tolist():
-            psch[b] -= net.load.loc[net.load['bus'] == b, 'p_mw'].values.sum() / sb
-            qsch[b] -= net.load.loc[net.load['bus'] == b, 'q_mvar'].values.sum() / sb
     return psch, qsch
 
 
-def run_lf(load_p, net, tol=1e-6, max_iter=100):
+def run_lf(load_p, net, tol=1e-4, max_iter=100):
 
     ybus = np.array(net._ppc["internal"]["Ybus"].todense())
+    pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
     n = ybus.shape[0]  # Number of buses.
-    slack_bus = net.ext_grid.iloc[0]['bus']
-    gen_buses = set(net.gen['bus'])
+    slack_bus = pd2ppc[net.ext_grid.iloc[0]['bus']]
+    gen_buses = set([pd2ppc[b] for b in net.gen['bus']])
     ybus_hollow = ybus * (1 - np.eye(n))  # ybus with diagonal elements zeroed.
 
-    v = init_v(net, n)
-    psch, qsch = scheduled_p_q(net, load_p, n)
+    v = init_v(net, n, pd2ppc)
+    psch, qsch = scheduled_p_q(net, load_p, n, pd2ppc)
 
     it = 0
     while it < max_iter:
@@ -100,6 +100,9 @@ def main():
     net = ppnw.case4gs()
     net.ext_grid.at[0, 'vm_pu'] = 1.05
     net.gen.at[0, 'vm_pu'] = 0.99
+    pp.create_bus(net, 345, index=10)
+    pp.create_line_from_parameters(net, 10, 0, 1, 10, 100, 0, 1e10)
+    pp.create_load(net, 10, 100)
     pp.runpp(net)
     print(net)
 
