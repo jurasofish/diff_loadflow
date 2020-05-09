@@ -77,9 +77,8 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
             if b in gen_buses:
                 v[b] = np.abs(old_v[b]) * v[b] / np.abs(v[b])  # Only use angle.
         it += 1
-
-        errs = [np.abs(v[i] - old_v[i]) for i in range(n)]
-        if all(np.real(x) < tol and np.imag(x) < tol for x in errs):
+        v = np.array(v)
+        if np.allclose(v, old_v, rtol=tol, atol=0):
             break
 
     v = np.array(v)
