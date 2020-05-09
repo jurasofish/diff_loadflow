@@ -106,7 +106,7 @@ def main():
     def run_lf_wrapper(__load_p):
         return run_lf(__load_p, net)
 
-    load_p = np.zeros_like(net.load['p_mw'].values)
+    load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float64)
     p_slack = run_lf_wrapper(load_p)
     f_grad_p_slack = jacobian(run_lf_wrapper)
     grad_p_slack = f_grad_p_slack(load_p)
