@@ -12,9 +12,7 @@ np.set_printoptions(formatter={'complexfloat': lambda x: "{0:.3f}".format(x)})
 
 
 def init_v(net, n):
-    """ Return initial voltage vector based on generator voltage setpoints.
-    Buses without a generator are 0j+1
-    """
+    """ Initial voltage vector using generator voltage setpoints or 1j+0pu. """
     v = np.ones((n, ), dtype=np.complex64)
     for r in net.gen.itertuples():
         v[r.bus] = r.vm_pu
@@ -23,73 +21,77 @@ def init_v(net, n):
     return v
 
 
-def run_lf(load_p, net, tol=1e-6, max_iter=500):
+def scheduled_p_q(net, load_p, n):
+    """ Return known per unit absolute real and reactive power injected at each bus.
+    That is, power injected from generators minus power absorbed by loads.
+    Neither real nor reactive power injected by the slack gen is not included.
+    Reactive power injected by PV gens is not included.
+    """
+    sb = net.sn_mva
+    psch, qsch = {b: 0 for b in range(n)}, {b: 0 for b in range(n)}
+    for b in range(n):
+
+        psch[b] -= load_p[b] / sb  # The magic.
+        if b in net.gen['bus'].tolist():
+            psch[b] += net.gen.loc[net.gen.bus == b, 'p_mw'].values.sum() / sb
+        if b in net.sgen['bus'].tolist():
+            psch[b] += net.sgen.loc[net.gen.bus == b, 'p_mw'].values.sum() / sb
+            qsch[b] += net.sgen.loc[net.gen.bus == b, 'q_mvar'].values.sum() / sb
+        if b in net.load['bus'].tolist():
+            psch[b] -= net.load.loc[net.load['bus'] == b, 'p_mw'].values.sum() / sb
+            qsch[b] -= net.load.loc[net.load['bus'] == b, 'q_mvar'].values.sum() / sb
+    return psch, qsch
+
+
+def run_lf(load_p, net, tol=1e-6, max_iter=100):
 
     ybus = np.array(net._ppc["internal"]["Ybus"].todense())
     n = ybus.shape[0]  # Number of buses.
     slack_bus = net.ext_grid.iloc[0]['bus']
     gen_buses = set(net.gen['bus'])
-    sb = net.sn_mva
-    ybus_hollow = ybus - np.eye(n)*ybus  # ybus with diagonal elements zeroed.
+    ybus_hollow = ybus * (1 - np.eye(n))  # ybus with diagonal elements zeroed.
+
     v = init_v(net, n)
+    psch, qsch = scheduled_p_q(net, load_p, n)
 
-    # Per unit absolute real and reactive power injected at each bus.
-    psch, qsch = {i: 0 for i in range(n)}, {i: 0 for i in range(n)}
-    for b in range(n):
-        if b in net.gen['bus'].tolist():
-            psch[b] += net.gen.loc[net.gen.bus == b, 'p_mw'].values[0] / sb
-        if b in net.load['bus'].tolist():
-            psch[b] -= load_p[b] / sb  # The magic.
-            qsch[b] -= net.load.loc[net.load['bus'] == b, 'q_mvar'].values[0] / sb
+    it = 0
+    while it < max_iter:
+        old_v, v = v, [x for x in v]
+        for b in [b for b in range(n) if b != slack_bus]:
+            qsch_b = (-1*np.imag(np.conj(v[b]) * np.sum(ybus[b, :] * v))
+                      if b in gen_buses else qsch[b])
+            v[b] = (1/ybus[b, b]) * ((psch[b]-1j*qsch_b)/np.conj(old_v[b])
+                                     - np.sum(ybus_hollow[b, :] * old_v))
+            if b in gen_buses:
+                v[b] = np.abs(old_v[b]) * v[b] / np.abs(v[b])  # Only use angle.
+        it += 1
 
-    iter = 0
-    while iter < max_iter:
-        old_v, new_v = v, [None for _ in range(n)]
-        for b in range(n):
-            if b == slack_bus:
-                bv = v[b]
-            else:
-                bv = ((psch[b] - 1j*qsch[b])/np.conj(v[b])
-                      - np.sum(ybus_hollow[b, :] * v)) / ybus[b, b]
-                if b in gen_buses:
-                    bv = np.abs(v[b]) * bv / np.abs(bv)  # Correct magnitude.
-            new_v[b] = bv
-        v = np.array(new_v)
-        iter += 1
-        if np.sum(np.abs(v - old_v)) < n * tol:  # TODO: correct this.
+        errs = [np.abs(v[i] - old_v[i]) for i in range(n)]
+        if all(np.real(x) < tol and np.imag(x) < tol for x in errs):
             break
-    print(f'{iter} iterations')
 
-    print(v)
-    print(net.res_bus.vm_pu * np.exp(1j * net.res_bus.va_degree * np.pi/180))
 
-    '''
-    loss = np.array(range(1, 1+len(load_p))) * load_p
-    loss = loss + np.array(range(10, 10+len(load_p)))  # Should be ignored
-    loss = loss * v
-    loss = np.abs(np.sum(loss))
-    '''
-    loss = np.sum(np.abs(v)) / v.shape[0]
-    return loss
+    v = np.array(v)
+    p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
+               - psch[slack_bus])
+    return p_slack
 
 
 def main():
     net = ppnw.case4gs()
     net.ext_grid.at[0, 'vm_pu'] = 1.05
     net.gen.at[0, 'vm_pu'] = 0.99
-    net.load.at[2, 'p_mw'] = 1000
     pp.runpp(net)
     print(net)
 
     def run_lf_wrapper(__load_p):
-        return run_lf(__load_p, net, tol=1e-4, max_iter=50)
+        return run_lf(__load_p, net)
 
-    load_p = net.load['p_mw'].values
-    loss = run_lf_wrapper(load_p)
-    print(f'loss is {loss:.2f} MW')
-    f_grad_loss = jacobian(run_lf_wrapper)
-    grad_loss = f_grad_loss(load_p)
-    print(f'Gradient of loss with respect to inputs {grad_loss}')
+    load_p = np.zeros_like(net.load['p_mw'].values)
+    p_slack = run_lf_wrapper(load_p)
+    f_grad_p_slack = jacobian(run_lf_wrapper)
+    grad_p_slack = f_grad_p_slack(load_p)
+    print(f'Gradient of slack power with respect to load at each bus: {grad_p_slack}')
 
 
 if __name__ == '__main__':
