@@ -36,7 +36,7 @@ def init_v(net, n, pd2ppc):
     for r in net.gen.itertuples():
         v[pd2ppc[r.bus]] = r.vm_pu
     for r in net.ext_grid.itertuples():
-        v[pd2ppc[r.bus]] = r.vm_pu * np.exp(1j * r.va_degree * 180 / np.pi)
+        v[pd2ppc[r.bus]] = r.vm_pu * np.exp(1j * r.va_degree * np.pi / 180)
     return np.array(v, dtype=np.complex64)
 
 
