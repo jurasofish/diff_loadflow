@@ -66,7 +66,7 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
     ybus = np.array(net._ppc["internal"]["Ybus"].todense())
     pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
     n = ybus.shape[0]  # Number of buses.
-    slack_bus = pd2ppc[net.ext_grid.iloc[0]['bus']]
+    slack_buses = set(pd2ppc[net.ext_grid['bus']])
     gen_buses = set([pd2ppc[b] for b in net.gen['bus']])
     ybus_hollow = ybus * (1 - np.eye(n))  # ybus with diagonal elements zeroed.
 
@@ -76,7 +76,7 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
     it = 0
     while it < max_iter:
         old_v, v = v, [x for x in v]
-        for b in [b for b in range(n) if b != slack_bus]:
+        for b in [b for b in range(n) if b not in slack_buses]:
             qsch_b = (-1*np.imag(np.conj(old_v[b]) * np.sum(ybus[b, :] * old_v))
                       if b in gen_buses else qsch[b])
             v[b] = (1/ybus[b, b]) * ((psch[b]-1j*qsch_b)/np.conj(old_v[b])
@@ -88,8 +88,10 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
         if np.allclose(v, old_v, rtol=tol, atol=0):
             break
 
-    p_slack = (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
-               - psch[slack_bus])
+    p_slack = sum(
+        (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
+         - psch[slack_bus]) for slack_bus in slack_buses
+    )
 
     if it >= max_iter:
         raise ConvergenceError(f'Load flow not converged in {it} iterations.')
@@ -97,10 +99,10 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
         raise ConsistencyError(f'Voltages not consistent with pandapower\n'
                                f'pandapower\t\t{net._ppc["internal"]["V"]}'
                                f'\nthis program\t{v}')
-    if not np.allclose(p_slack, net.res_ext_grid.iloc[0]['p_mw'],
+    if not np.allclose(p_slack, net.res_ext_grid['p_mw'].sum(),
                        atol=comparison_tol, rtol=0):
         raise ConsistencyError(f'Slack bus powers inconsistent\n'
-                               f'pandapower\t\t{net.res_ext_grid.iloc[0]["p_mw"]}'
+                               f'pandapower\t\t{net.res_ext_grid["p_mw"].sum()}'
                                f'\nthis program\t{p_slack}')
 
     return p_slack
@@ -116,18 +118,20 @@ def run_lf_pp(load_p, net, algorithm='nr', init='auto'):
         load_idx_to_drop.append(new_idx)
     pp.runpp(net, algorithm=algorithm, init=init)
     net.load = net.load.drop(load_idx_to_drop)
-    return net.res_ext_grid.iloc[0]['p_mw']
+    return net.res_ext_grid['p_mw'].sum()
 
 
 def main():
-    net = ppnw.case14()
+    net = ppnw.case9()
     net.ext_grid.at[0, 'vm_pu'] = 1.05
     net.gen.at[0, 'vm_pu'] = 0.99
     pp.create_bus(net, 345, index=1000)
     pp.create_line_from_parameters(net, 1000, 0, 1, 10, 100, 0, 1e10)
     pp.create_load(net, 1000, 100)
+    pp.create_ext_grid(net, 8)
     pp.runpp(net)
     print(net)
+    print(net.res_ext_grid)
 
     load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float32)
     p_slack = run_lf(load_p, net)
