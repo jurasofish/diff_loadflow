@@ -13,9 +13,8 @@ np.set_printoptions(formatter={'complexfloat': lambda x: "{0:.3f}".format(x)})
 
 
 def fin_diff(f, x, eps=1e-6):
-    # Finite difference approximation of grad of function f. From JAX docs ty.
-    return np.array([(f(x + eps * v) - f(x - eps * v)) / (2 * eps)
-                     for v in np.eye(len(x))])
+    """ Finite difference approximation of grad of function f. From JAX docs. """
+    return np.array([(f(x + eps*v) - f(x - eps*v)) / (2*eps) for v in np.eye(len(x))])
 
 
 def init_v(net, n, pd2ppc):
@@ -31,7 +30,7 @@ def init_v(net, n, pd2ppc):
 def scheduled_p_q(net, load_p, n, pd2ppc):
     """ Return known per unit absolute real and reactive power injected at each bus.
     That is, power injected from generators minus power absorbed by loads.
-    Neither real nor reactive power injected by the slack gen is not included.
+    Neither real nor reactive power injected by the slack gen is included.
     Reactive power injected by PV gens is not included.
     """
     sb = net.sn_mva
