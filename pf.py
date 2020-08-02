@@ -1,15 +1,12 @@
 import pandapower as pp
 import pandapower.networks as ppnw
-import pandas as pd
 import autograd.numpy as np
 from autograd import grad
 import time
+from copy import deepcopy
 
-
-pd.options.display.width = 1200
-pd.options.display.max_colwidth = 100
-pd.options.display.max_columns = 100
-np.set_printoptions(formatter={'complexfloat': lambda x: "{0:.3f}".format(x)})
+np.set_printoptions(formatter={'complexfloat': lambda x: "{0:.3f}".format(x),
+                               'float_kind': lambda x: "{0:.3f}".format(x)})
 
 
 def fin_diff(f, x, eps=1e-6):
@@ -59,9 +56,10 @@ def run_lf(load_p, net, tol=1e-9, comp_tol=1e-3, max_iter=10000):
     in the pandapower network object) is equal to the derivative of x alone.
 
     Args:
-        load_p (iterable): Iterable of very small values.
-            Really, the power flow will work with non-zero but the consistency
-            assertion with pandapower will fail.
+        load_p (iterable): Iterable of additional loads to add to network.
+            Index i will add load to bus i.
+            These should be very small values so that the consistency
+            assertion with pandapower succeeeds.
         net (pp.Network): Solved Pandapower network object that defines the
             elements of the network and contains the ybus matrix.
         tol (float): Convergence tolerance (voltage).
@@ -108,25 +106,31 @@ def run_lf(load_p, net, tol=1e-9, comp_tol=1e-3, max_iter=10000):
 
 
 def run_lf_pp(load_p, net, algorithm='nr'):
-    """ Equivalent to ``run_lf`` but using pandapower directly. """
+    """ Calculate total slack generation with given load power changes.
+
+    Args:
+        load_p (iterable): Iterable of additional loads to add to network.
+            Index i will add load to bus i.
+        net (pp.Network):
+        algorithm (str): Algorithm to pass to pandapower solver.
+
+    Returns:
+        float: Sum of real power injected by slack buses in the network.
+    """
+    net = deepcopy(net)
     pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
-    load_idx_to_drop = []  # Drop the added loads at the end.
-    # Remember, we don't want to add the load twice in the case of fused buses.
-    for b in range(len(load_p)):
-        pp_bus = np.where(pd2ppc == b)[0][0]
-        new_idx = pp.create_load(net, pp_bus, load_p[b])
-        load_idx_to_drop.append(new_idx)
+    for b, extra_p in enumerate(load_p):
+        pp.create_load(net, np.where(pd2ppc == b)[0][0], extra_p)
     pp.runpp(net, algorithm=algorithm)
-    net.load = net.load.drop(load_idx_to_drop)
     return net.res_ext_grid['p_mw'].sum()
 
 
 def main():
     net = ppnw.case9()
-    pp.runpp(net)
-    print(net)
+    pp.runpp(net)  # Make sure network contains ybus and the solution values.
+    load_p = np.zeros((net.bus.shape[0], ), np.float32)
 
-    load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float32)
+    print(net)
     p_slack = run_lf(load_p, net)
     print(f'Slack generator power output: {p_slack}')
 
