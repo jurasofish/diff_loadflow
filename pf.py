@@ -12,18 +12,6 @@ pd.options.display.max_columns = 100
 np.set_printoptions(formatter={'complexfloat': lambda x: "{0:.3f}".format(x)})
 
 
-class DiffLFException(Exception):
-    pass
-
-
-class ConvergenceError(DiffLFException):
-    pass
-
-
-class ConsistencyError(DiffLFException):
-    pass
-
-
 def fin_diff(f, x, eps=1e-6):
     # Finite difference approximation of grad of function f. From JAX docs ty.
     return np.array([(f(x + eps * v) - f(x - eps * v)) / (2 * eps)
@@ -93,17 +81,12 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
          - psch[slack_bus]) for slack_bus in slack_buses
     )
 
-    if it >= max_iter:
-        raise ConvergenceError(f'Load flow not converged in {it} iterations.')
-    if not np.allclose(v, net._ppc["internal"]["V"], atol=comparison_tol, rtol=0):
-        raise ConsistencyError(f'Voltages not consistent with pandapower\n'
-                               f'pandapower\t\t{net._ppc["internal"]["V"]}'
-                               f'\nthis program\t{v}')
-    if not np.allclose(p_slack, net.res_ext_grid['p_mw'].sum(),
-                       atol=comparison_tol, rtol=0):
-        raise ConsistencyError(f'Slack bus powers inconsistent\n'
-                               f'pandapower\t\t{net.res_ext_grid["p_mw"].sum()}'
-                               f'\nthis program\t{p_slack}')
+    # Assert convergence and consistency with pandapower.
+    assert it < max_iter, f'Load flow not converged in {it} iterations.'
+    assert np.allclose(v, net._ppc["internal"]["V"], atol=comparison_tol, rtol=0),\
+           f'Voltage\npp:\t\t{net._ppc["internal"]["V"]}\nsolved:\t{v}'
+    assert np.allclose(p_slack, net.res_ext_grid['p_mw'].sum(), atol=comparison_tol, rtol=0),\
+           f'Slack Power\npp:\t\t{net.res_ext_grid["p_mw"].sum()}\nsolved:\t{p_slack}'
 
     return p_slack
 
