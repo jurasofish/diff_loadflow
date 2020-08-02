@@ -107,7 +107,7 @@ def run_lf(load_p, net, tol=1e-9, comp_tol=1e-3, max_iter=10000):
     return p_slack
 
 
-def run_lf_pp(load_p, net, algorithm='nr', init='auto'):
+def run_lf_pp(load_p, net, algorithm='nr'):
     """ Equivalent to ``run_lf`` but using pandapower directly. """
     pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
     load_idx_to_drop = []  # Drop the added loads at the end.
@@ -116,7 +116,7 @@ def run_lf_pp(load_p, net, algorithm='nr', init='auto'):
         pp_bus = np.where(pd2ppc == b)[0][0]
         new_idx = pp.create_load(net, pp_bus, load_p[b])
         load_idx_to_drop.append(new_idx)
-    pp.runpp(net, algorithm=algorithm, init=init)
+    pp.runpp(net, algorithm=algorithm)
     net.load = net.load.drop(load_idx_to_drop)
     return net.res_ext_grid['p_mw'].sum()
 
