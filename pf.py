@@ -18,7 +18,7 @@ def fin_diff(f, x, eps=1e-6):
 
 
 def init_v(net, n, pd2ppc):
-    """ Initial voltage vector using generator voltage setpoints or 1j+0pu. """
+    """ Initial bus voltage vector using generator voltage setpoints or 1j+0pu. """
     v = [0j + 1 for _ in range(n)]
     for r in net.gen.itertuples():
         v[pd2ppc[r.bus]] = r.vm_pu
@@ -27,38 +27,60 @@ def init_v(net, n, pd2ppc):
     return np.array(v, dtype=np.complex64)
 
 
-def scheduled_p_q(net, load_p, n, pd2ppc):
-    """ Return known per unit absolute real and reactive power injected at each bus.
-    That is, power injected from generators minus power absorbed by loads.
-    Neither real nor reactive power injected by the slack gen is included.
-    Reactive power injected by PV gens is not included.
+def scheduled_p_q(net, n, pd2ppc):
+    """ Return known per unit real and reactive power injected at each bus.
+    Does not include slack real/reactive powers nor PV gen reactive power.
     """
-    sb = net.sn_mva
-    psch = {b: -1 * load_p[b]/sb for b in range(n)}
-    qsch = {b: 0 for b in range(n)}
+    psch, qsch = {b: 0 for b in range(n)}, {b: 0 for b in range(n)}
     for r in net.gen.itertuples():
-        psch[pd2ppc[r.bus]] += r.p_mw / sb
+        psch[pd2ppc[r.bus]] += r.p_mw / net.sn_mva
     for r in net.sgen.itertuples():
-        psch[pd2ppc[r.bus]] += r.p_mw / sb
-        qsch[pd2ppc[r.bus]] += r.q_mvar / sb
+        psch[pd2ppc[r.bus]] += r.p_mw / net.sn_mva
+        qsch[pd2ppc[r.bus]] += r.q_mvar / net.sn_mva
     for r in net.load.itertuples():
-        psch[pd2ppc[r.bus]] -= r.p_mw / sb
-        qsch[pd2ppc[r.bus]] -= r.q_mvar / sb
-
+        psch[pd2ppc[r.bus]] -= r.p_mw / net.sn_mva
+        qsch[pd2ppc[r.bus]] -= r.q_mvar / net.sn_mva
     return psch, qsch
 
 
-def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
+def run_lf(load_p, net, tol=1e-9, comp_tol=1e-3, max_iter=10000):
+    """ Perform Gauss-Seidel power flow on the given pandapower network.
 
+    The ``load_p`` array is an iterable of additional real power load to add
+    to each bus. By providing this as an input, this python function becomes
+    the function ``slack_power = f(load_power)`` and thus the derivative of
+    slack power with respect to load power can be calculated.
+
+    By restricting the values of `load_p` to be very small we can ensure that
+    this function is solving the load flow correctly by comparing it to the
+    results in the pandapower network. Restricting to very small does not interfere
+    with calculation of the derivative - that is, the derivative of
+    x (the small value given as input) plus a constant (the load power specified
+    in the pandapower network object) is equal to the derivative of x alone.
+
+    Args:
+        load_p (iterable): Iterable of very small values.
+            Really, the power flow will work with non-zero but the consistency
+            assertion with pandapower will fail.
+        net (pp.Network): Solved Pandapower network object that defines the
+            elements of the network and contains the ybus matrix.
+        tol (float): Convergence tolerance (voltage).
+        comp_tol (float): Tolerance for comparison check against pandapower.
+        max_iter(int): Max iterations to solve load flow.
+
+    Returns:
+        float: Sum of real power injected by slack buses in the network.
+    """
     ybus = np.array(net._ppc["internal"]["Ybus"].todense())
     pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
     n = ybus.shape[0]  # Number of buses.
     slack_buses = set(pd2ppc[net.ext_grid['bus']])
     gen_buses = set([pd2ppc[b] for b in net.gen['bus']])
     ybus_hollow = ybus * (1 - np.eye(n))  # ybus with diagonal elements zeroed.
-
     v = init_v(net, n, pd2ppc)
-    psch, qsch = scheduled_p_q(net, load_p, n, pd2ppc)
+    psch, qsch = scheduled_p_q(net, n, pd2ppc)
+    # Incorporate the variables we are differentiating with respect to:
+    psch = {b: p - load_p[b] for b, p in psch.items()}
 
     it = 0
     while it < max_iter:
@@ -74,23 +96,19 @@ def run_lf(load_p, net, tol=1e-9, comparison_tol=1e-3, max_iter=10000):
         v = np.array(v)
         if np.allclose(v, old_v, rtol=tol, atol=0):
             break
-
-    p_slack = sum(
-        (np.real(np.conj(v[slack_bus]) * np.sum(ybus[slack_bus, :] * v))
-         - psch[slack_bus]) for slack_bus in slack_buses
-    )
-
+    p_slack = sum((np.real(np.conj(v[b]) * np.sum(ybus[b, :] * v)) - psch[b])
+                  for b in slack_buses)
     # Assert convergence and consistency with pandapower.
     assert it < max_iter, f'Load flow not converged in {it} iterations.'
-    assert np.allclose(v, net._ppc["internal"]["V"], atol=comparison_tol, rtol=0),\
+    assert np.allclose(v, net._ppc["internal"]["V"], atol=comp_tol, rtol=0),\
            f'Voltage\npp:\t\t{net._ppc["internal"]["V"]}\nsolved:\t{v}'
-    assert np.allclose(p_slack, net.res_ext_grid['p_mw'].sum(), atol=comparison_tol, rtol=0),\
+    assert np.allclose(p_slack, net.res_ext_grid['p_mw'].sum(), atol=comp_tol, rtol=0),\
            f'Slack Power\npp:\t\t{net.res_ext_grid["p_mw"].sum()}\nsolved:\t{p_slack}'
-
     return p_slack
 
 
 def run_lf_pp(load_p, net, algorithm='nr', init='auto'):
+    """ Equivalent to ``run_lf`` but using pandapower directly. """
     pd2ppc = net._pd2ppc_lookups["bus"]  # Pandas bus num --> internal bus num.
     load_idx_to_drop = []  # Drop the added loads at the end.
     # Remember, we don't want to add the load twice in the case of fused buses.
@@ -105,15 +123,8 @@ def run_lf_pp(load_p, net, algorithm='nr', init='auto'):
 
 def main():
     net = ppnw.case9()
-    net.ext_grid.at[0, 'vm_pu'] = 1.05
-    net.gen.at[0, 'vm_pu'] = 0.99
-    pp.create_bus(net, 345, index=1000)
-    pp.create_line_from_parameters(net, 1000, 0, 1, 10, 100, 0, 1e10)
-    pp.create_load(net, 1000, 100)
-    pp.create_ext_grid(net, 8)
     pp.runpp(net)
     print(net)
-    print(net.res_ext_grid)
 
     load_p = np.zeros((net._ppc["internal"]["Ybus"].shape[0], ), np.float32)
     p_slack = run_lf(load_p, net)
@@ -142,13 +153,6 @@ def main():
     grad_p_slack_fin_diff_pp = fin_diff(lambda x: run_lf_pp(x, net, 'gs'), load_p)
     print(f'\nCalculated using finite differences and pandapower gauss siedel'
           f':\n{grad_p_slack_fin_diff_pp}')
-    print(f'Took {time.perf_counter() - t1:.2f} Seconds')
-
-    t1 = time.perf_counter()
-    grad_p_slack_fin_diff_pp_results =\
-        fin_diff(lambda x: run_lf_pp(x, net, 'nr', 'results'), load_p)
-    print(f'\nCalculated using finite differences and pandapower and NR and results init'
-          f':\n{grad_p_slack_fin_diff_pp_results}')
     print(f'Took {time.perf_counter() - t1:.2f} Seconds')
 
 
