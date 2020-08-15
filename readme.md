@@ -1,4 +1,4 @@
-red# Automatic Differentiation for Power System Analysis
+# Automatic Differentiation for Power System Analysis
 
 *This notebook calculates marginal loss factors of a power system using automatic differentiation.*
 
