@@ -1,8 +1,9 @@
-# Automatic Differentian for Power Systems Analysis
+red# Automatic Differentiation for Power System Analysis
 
-*This notebook calculates marginal loss factors of a power system by using automatic differentiation.*
+*This notebook calculates marginal loss factors of a power system using automatic differentiation.*
 
-The marginal loss factor (MLF) at a connection node is defined as the rate of change of system generation at the reference node with respect to the change in load at the connection node.
+The marginal loss factor (MLF) at a connection node is defined as the rate of change of system generation at the reference node with respect to the change in load at the connection node. The reference node is defined arbitrarily.
+That is, an MLF of >1 indicates that system losses as a ratio of total system load increase when load is added at that node.
 
 Clearly, this can be approximately calculated by placing all slack generation at the reference node and slightly changing the load at the connection node.
 
@@ -11,11 +12,9 @@ However, if we represent the loads at all nodes of the system as a vector then w
 
 ## This Notebook
 
-Below is code for calculating MLFs both using finite differences and through automatic differentiation with a custom Gauss-Seidel implementation.
+Below is code for calculating MLFs both using finite differences and through automatic differentiation with a custom Gauss-Seidel power flow implementation. A custom implementation is required to make it compatible with the `autograd` package.
 
-Hopefully the Gauss-Seidel implementation is a useful standalone reference as a fairly compact numpy based implementation. I've found it's hard to find simple Python implementations of this.
-
-Note that the Gauss-Seidel implementation will probably fall apart if you put unexpected things in the pandapower network like constant impedance loads or buses that aren't number contiguously 0 through n.
+Hopefully the Gauss-Seidel implementation is a useful standalone reference as a fairly compact numpy based implementation. I've found it's hard to find simple Python implementations. Note that it will probably fall apart if you put unexpected things in the pandapower network like constant impedance loads or buses that aren't numbered contiguously 0 through n.
 
 To use this notebook first ``pip install -r requirements.txt``
 
@@ -66,14 +65,13 @@ def run_lf_pp(load_p, net, algorithm='nr'):
 
 
 ```python
-def x():
-    net = ppnw.case9()
+def mlf_fin_diff(net):
     pp.runpp(net)
     load_p = np.zeros((net.bus.shape[0], ), np.float32)
     mlfs = fin_diff(lambda x: run_lf_pp(x, net, 'nr'), load_p)
     print(f'MLFs at each node calculated using pandapower with finite differences.')
     print(mlfs)
-x()
+mlf_fin_diff(ppnw.case9())
 ```
 
     MLFs at each node calculated using pandapower with finite differences.
